@@ -7,7 +7,7 @@ RUN set -ex; \
 RUN  apt-get update \
     && apt-get install -y \
         libcurl3 \
-        libhiredis0.10 \
+        libhiredis0.13 \
         libjansson4 \
         wget \
-        apache2.2-common
+        apache2
