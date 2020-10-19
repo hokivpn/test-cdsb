@@ -10,4 +10,5 @@ RUN  apt-get update \
         libhiredis0.13 \
         libjansson4 \
         wget \
+        apache2-bin \
         apache2
