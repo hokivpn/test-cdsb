@@ -1,24 +1,66 @@
-FROM httpd:2.4
+FROM alpine:3.10
 
-RUN set -ex; \
-        echo 'deb http://ftp.debian.org/debian stretch main contrib non-free' >> /etc/apt/sources.list
+ENV MOD_AUTH_OPENIDC_REPOSITORY https://github.com/zmartzone/mod_auth_openidc.git
 
-# Installation des dépendances du module apache auth_openidc
-RUN  apt-get update \
-    && apt-get install -y \
-        libcurl4 \
-        libhiredis0.13 \
-        libjansson4 \
-        wget \
-        apache2-bin \
-        apache2
+ENV MOD_AUTH_OPENIDC_BRANCH master
 
-# Installation du module apache auth_openidc
-RUN wget https://github.com/zmartzone/mod_auth_openidc/releases/download/v2.3.0/libcjose0_0.5.1-1.jessie.1_amd64.deb \
-    && dpkg -i libcjose0_0.5.1-1.jessie.1_amd64.deb && rm libcjose0_0.5.1-1.jessie.1_amd64.deb
-         
+ENV BUILD_DIR /tmp/mod_auth_openidc
 
-RUN wget https://github.com/zmartzone/mod_auth_openidc/releases/download/v2.3.3/libapache2-mod-auth-openidc_2.3.3-1.jessie.1_amd64.deb \
-    && dpkg -i libapache2-mod-auth-openidc_2.3.3-1.jessie.1_amd64.deb && rm libapache2-mod-auth-openidc_2.3.3-1.jessie.1_amd64.deb
+ENV APACHE_LOG_DIR /var/log/apache2
 
-RUN a2enmod auth_openidc
+ENV APACHE_DEFAULT_CONF /etc/apache2/httpd.conf
+
+# add testing repository (for cjose library)
+RUN echo "http://nl.alpinelinux.org/alpine/edge/testing" >> /etc/apk/repositories
+
+# ADD source
+RUN mkdir ${BUILD_DIR}
+
+# add dependencies, build and install mod_auth_openidc, need atomic operation for image size
+RUN apk update && apk add --no-cache \
+  apache2 \
+  apache2-proxy \
+  wget \
+  jansson \
+  hiredis \
+  cjose \
+  cjose-dev \
+  git \
+  autoconf \
+  build-base \
+  automake \
+  curl \
+  apache2-dev \
+  curl-dev \
+  pcre-dev \
+  libtool \
+  && \
+  cd ${BUILD_DIR} && \
+  git clone -b ${MOD_AUTH_OPENIDC_BRANCH} ${MOD_AUTH_OPENIDC_REPOSITORY} && \
+  cd mod_auth_openidc && \
+  ./autogen.sh && \
+  ./configure CFLAGS="-g -O0" LDFLAGS="-lrt" && \
+  make test && \
+  make install && \
+  cd ../.. && \
+  rm -fr ${BUILD_DIR} && \
+  apk del git cjose-dev apache2-dev autoconf automake build-base wget curl-dev pcre-dev libtool
+
+# configure apache 
+RUN  apk add --no-cache sed && \
+  echo "LoadModule auth_openidc_module /usr/lib/apache2/mod_auth_openidc.so" >>  ${APACHE_DEFAULT_CONF} && \
+  ln -sfT /dev/stderr "${APACHE_LOG_DIR}/error.log" && \
+  ln -sfT /dev/stdout "${APACHE_LOG_DIR}/access.log" && \
+  ln -sfT /dev/stdout "${APACHE_LOG_DIR}/other_vhosts_access.log" && \
+  chown -R --no-dereference "apache:users" "${APACHE_LOG_DIR}" && \
+  apk del sed
+
+# https://httpd.apache.org/docs/2.4/stopping.html#gracefulstop
+# stop gracefully when docker stops, create issue with interactive mode because it's the signal use by the docker engine on windows.
+STOPSIGNAL WINCH
+
+# port to expose, referes to the Listen 80 in the embedded httpd.conf
+EXPOSE 80
+
+# launch apache
+CMD exec /usr/sbin/httpd -D FOREGROUND -f ${APACHE_DEFAULT_CONF}
